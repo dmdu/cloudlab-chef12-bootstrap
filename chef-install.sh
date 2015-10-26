@@ -26,7 +26,7 @@ USER_KEY=admin.pem
 ORG=admingroup
 ORG_KEY=admingroup.pem
 REPO_DIR=/chef-repo
-GIT_REPO=https://github.com/emulab/chef-repo.git
+#GIT_REPO=https://github.com/emulab/chef-repo.git
 CREDS=/root/.chefauth
 DOTCHEF=/root/.chef
 
@@ -103,17 +103,31 @@ syntax_check_cache_path  "$DOTCHEF/syntaxcache"
 cookbook_path            ["$REPO_DIR/cookbooks"]
 END
 
+#echo "Installing xmlstarlet package for parsing manifest"
+dpkg -l | grep xmlstarlet
+if [ $? -ne 0 ]; then
+  apt-get update
+  apt-get -y install xmlstarlet
+fi
+
 # Make knife trust the server's certificate
 knife ssl fetch
 
 # Copy the repo
+GIT_REPO=`geni-get manifest| xmlstarlet fo | grep CHEFREPO | cut -d\" -f2`
 git clone $GIT_REPO $REPO_DIR
 
-# Get the push-jobs cookbook and its dependecies
-knife cookbook site install push-jobs
+# Get the specified comminity cookbooks from Chef Supermarket
+COMMUNITYCOOKBOOKS=`geni-get manifest| xmlstarlet fo | grep COMMUNITYCOOKBOOKS | cut -d\" -f2`
+for cb in $COMMUNITYCOOKBOOKS ; do
+  knife cookbook site install $cb
+done
 
-# Get the dependecies for cookbooks in $GIT_REPO. This list will grow as more cookbooks are added in the repo
-knife cookbook site install nfs
+# Upload all cookbooks to the server
+knife cookbook upload -a
+
+# Upload all roles to the server
+knife role from file $REPO_DIR/roles/*.rb
 
 # Warning: configuration below works but is very sensitive
 # If hostbased authentication is configured, the host key might not be used with Chef's Ruby implementation of SSH
@@ -134,23 +148,46 @@ ssh-add $hostkey
 # Allow ssh connects to itself
 cat "$hostkey.pub" >> /root/.ssh/authorized_keys
 
-#echo "Installing xmlstarlet package for parsing manifest"
-dpkg -l | grep xmlstarlet
-if [ $? -ne 0 ]; then
-  apt-get update
-  apt-get -y install xmlstarlet
-fi
-
 # Bootsrap all client nodes
 # Warning: obviously sensitive parsing
 # Get short node names from the manifest (the portion before . in the full names)
 #names=`geni-get manifest | sed -r 's/<node/\n<node/g' | grep -E ".*<node.*/node>.*" | sed -r "s/.*host\ name=\"([^\"]*)\".*/\1/" | sed -s "s/\..*//"`
 names=`geni-get manifest| xmlstarlet fo | xmlstarlet sel -B -t -c "//_:node" | sed -r 's/<node/\n<node/g' | sed -r "s/.*host\ name=\"([^\"]*)\".*/\1/" | sed -s "s/\..*//"`
 
+# Lists of default cookbooks and roles specified in the profile parameter:
+DEFAULTCOOKBOOKS=`geni-get manifest| xmlstarlet fo | grep DEFAULTCOOKBOOKS | cut -d\" -f2`
+DEFAULTROLES=`geni-get manifest| xmlstarlet fo | grep DEFAULTROLES | cut -d\" -f2`
+
 echo "$names" | while read line ; do
   echo "Bootstrapping $line"
   knife bootstrap "$line" -N "$line"
+  
+  for cb in $DEFAULTCOOKBOOKS ; do
+    knife node run_list add $line "recipe[$cb]"
+  done
+  for rl in $DEFAULTROLES ; do
+    knife node run_list add $line "role[$rl]"
+  done
 done
+
+# Test/demo commands
+OUT_DEST=/tmp/chef-tests
+rm $OUT_DEST
+C="chef-client -v"
+OUT=`$C`
+echo -e "# $C\n$OUT" >> $OUT_DEST
+C="knife cookbook list"
+OUT=`$C`
+echo -e "# $C\n$OUT" >> $OUT_DEST
+C="knife node list"
+OUT=`$C`
+echo -e "# $C\n$OUT" >> $OUT_DEST
+C="knife role list"
+OUT=`$C`
+echo -e "# $C\n$OUT" >> $OUT_DEST
+C="knife status -r"
+OUT=`$C`
+echo -e "# $C\n$OUT" >> $OUT_DEST
 
 # --------------------------
 # Notify the owner via email
@@ -158,4 +195,6 @@ echo -e "Dear User,\n\nChef 12 should be installed on `hostname` now. \
 Installation log can be found in: /var/log/init-chef.log \
 To explore the web console, copy this hostname and paste it into your browser. \
 To authenticate, use credentials saved in $CREDS.\n\n\
+Below is a sample of Chef commands showing details of the current configuration: \n\n\
+`cat $OUT_DEST`\n\n\
 Happy automation with Chef! For more information, use resources at: http://docs.chef.io/" |  mail -s "Chef 12 Is Deployed" ${SWAPPER_EMAIL} &
