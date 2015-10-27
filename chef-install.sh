@@ -170,6 +170,13 @@ echo "$names" | while read line ; do
   done
 done
 
+# If selected, daemonize all clients with specified interval
+CLIENTDAEMON=`geni-get manifest| xmlstarlet fo | grep CLIENTDAEMON | cut -d\" -f2`
+DAEMONINTERVAL=`geni-get manifest| xmlstarlet fo | grep DAEMONINTERVAL | cut -d\" -f2`
+if [ "$CLIENTDAEMON" == "True" ] ; then
+  knife ssh 'name:*' "chef-client -d -i $DAEMONINTERVAL"
+fi
+
 # Test/demo commands
 OUT_DEST=/tmp/chef-tests
 rm $OUT_DEST
