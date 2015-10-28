@@ -5,6 +5,10 @@
 # Date: 06/10/15
 set +x
 
+# Install dependencies
+apt-get update
+apt-get install -y wget expect curl git xmlstarlet
+
 # Configure email
 BOOTDIR=/var/emulab/boot
 SWAPPER=`cat $BOOTDIR/swapper`
@@ -19,6 +23,8 @@ APTGETINSTALLOPTS='-y'
 APTGETINSTALL="apt-get install $APTGETINSTALLOPTS"
 $APTGETINSTALL dma
 
+# Set necessary variables and paths
+HOST=`hostname -f`
 CHEF_ADMIN=admin
 CHEF_ADMIN_PASS=`openssl rand -base64 10`
 ADMIN_EMAIL=$SWAPPER_EMAIL
@@ -26,10 +32,10 @@ USER_KEY=admin.pem
 ORG=admingroup
 ORG_KEY=admingroup.pem
 REPO_DIR=/chef-repo
-#GIT_REPO=https://github.com/emulab/chef-repo.git
 CREDS=/root/.chefauth
 DOTCHEF=/root/.chef
 
+# Save admin credentials
 echo $CHEF_ADMIN > $CREDS
 echo $CHEF_ADMIN_PASS >> $CREDS
 
@@ -42,12 +48,6 @@ if [ "$(id -u)" != "0" ]; then
    echo "This script must be run as root" 
    exit 1
 fi
-
-HOST=`hostname -f`
-
-# Required packages
-apt-get update
-apt-get install -y wget expect curl git
 
 # Install Chef server
 cd /tmp
@@ -103,13 +103,6 @@ syntax_check_cache_path  "$DOTCHEF/syntaxcache"
 cookbook_path            ["$REPO_DIR/cookbooks"]
 END
 
-#echo "Installing xmlstarlet package for parsing manifest"
-dpkg -l | grep xmlstarlet
-if [ $? -ne 0 ]; then
-  apt-get update
-  apt-get -y install xmlstarlet
-fi
-
 # Make knife trust the server's certificate
 knife ssl fetch
 
@@ -148,6 +141,13 @@ ssh-add $hostkey
 # Allow ssh connects to itself
 cat "$hostkey.pub" >> /root/.ssh/authorized_keys
 
+# If head is the only node (0-client case), update /etc/hosts so head can talk to itself (head's hostname is resolvable)
+NCLIENTS=`geni-get manifest| xmlstarlet fo | grep NCLIENTS | cut -d\" -f2`
+SHOSTNAME=`hostname -s`
+if [ "$NCLIENTS" == "0" ] ; then
+  echo "127.0.0.1 $SHOSTNAME" >> /etc/hosts
+fi
+
 # Bootsrap all client nodes
 # Warning: obviously sensitive parsing
 # Get short node names from the manifest (the portion before . in the full names)
@@ -158,6 +158,7 @@ names=`geni-get manifest| xmlstarlet fo | xmlstarlet sel -B -t -c "//_:node" | s
 DEFAULTCOOKBOOKS=`geni-get manifest| xmlstarlet fo | grep DEFAULTCOOKBOOKS | cut -d\" -f2`
 DEFAULTROLES=`geni-get manifest| xmlstarlet fo | grep DEFAULTROLES | cut -d\" -f2`
 
+# Boostrap all clients and apply cookbooks and roles
 echo "$names" | while read line ; do
   echo "Bootstrapping $line"
   knife bootstrap "$line" -N "$line"
@@ -177,24 +178,14 @@ if [ "$CLIENTDAEMON" == "True" ] ; then
   knife ssh 'name:*' "chef-client -d -i $DAEMONINTERVAL"
 fi
 
-# Test/demo commands
+# Test/demo commands to be run and included in the final email
 OUT_DEST=/tmp/chef-tests
 rm $OUT_DEST
-C="chef-client -v"
-OUT=`$C`
-echo -e "# $C\n$OUT" >> $OUT_DEST
-C="knife cookbook list"
-OUT=`$C`
-echo -e "# $C\n$OUT" >> $OUT_DEST
-C="knife node list"
-OUT=`$C`
-echo -e "# $C\n$OUT" >> $OUT_DEST
-C="knife role list"
-OUT=`$C`
-echo -e "# $C\n$OUT" >> $OUT_DEST
-C="knife status -r"
-OUT=`$C`
-echo -e "# $C\n$OUT" >> $OUT_DEST
+COMMANDS="chef-client -v; knife cookbook list; knife node list; knife role list; knife status -r"
+echo $COMMANDS | tr \; \\n | while read cmd ; do 
+  out=`$cmd`  
+  echo -e "# $cmd\n$out" >> $OUT_DEST
+done
 
 # --------------------------
 # Notify the owner via email
