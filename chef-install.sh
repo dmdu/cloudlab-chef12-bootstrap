@@ -51,9 +51,16 @@ fi
 
 # Install Chef server
 cd /tmp
+
+# Old way: wget-dpkg. Stopped workin on 11/06/15 - web-dl.packagecloud.io is down
 #wget https://web-dl.packagecloud.io/chef/stable/packages/ubuntu/trusty/chef-server-core_12.1.2-1_amd64.deb --directory-prefix=/tmp
-wget https://web-dl.packagecloud.io/chef/stable/packages/ubuntu/trusty/chef-server-core_12.2.0-1_amd64.deb
-dpkg -i chef-server-core*
+#wget https://web-dl.packagecloud.io/chef/stable/packages/ubuntu/trusty/chef-server-core_12.2.0-1_amd64.deb
+#dpkg -i chef-server-core*
+
+# New way
+curl -s https://packagecloud.io/install/repositories/chef/stable/script.deb.sh | sudo bash
+apt-get install chef-server-core=12.2.0-1
+
 chef-server-ctl reconfigure
 
 # Install Chef management console 
@@ -146,6 +153,9 @@ NCLIENTS=`geni-get manifest| xmlstarlet fo | grep NCLIENTS | cut -d\" -f2`
 SHOSTNAME=`hostname -s`
 if [ "$NCLIENTS" == "0" ] ; then
   echo "127.0.0.1 $SHOSTNAME" >> /etc/hosts
+  # Also, if head is the only node, no need to use host-based auth. For reliablity add head's key to authorized_keys
+  cat /root/.ssh/id_rsa.pub >> /root/.ssh/authorized_keys
+  cat /root/.ssh/id_rsa.pub >> /root/.ssh/authorized_keys2
 fi
 
 # Bootsrap all client nodes
