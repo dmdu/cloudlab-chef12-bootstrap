@@ -129,6 +129,9 @@ knife cookbook upload -a
 # Upload all roles to the server
 knife role from file $REPO_DIR/roles/*.rb
 
+# Upload all environments to the server
+knife environment from file $REPO_DIR/environments/*.rb
+
 # Warning: configuration below works but is very sensitive
 # If hostbased authentication is configured, the host key might not be used with Chef's Ruby implementation of SSH
 # Workaround: add the host private key in ssh agent
@@ -188,14 +191,27 @@ if [ "$CLIENTDAEMON" == "True" ] ; then
   knife ssh 'name:*' "chef-client -d -i $DAEMONINTERVAL"
 fi
 
+# If selected, run chef-client once on all client nodes
+CLIENTRUNONCE=`geni-get manifest| xmlstarlet fo | grep CLIENTRUNONCE | cut -d\" -f2`
+if [ "$CLIENTRUNONCE" == "True" ] ; then
+  knife ssh 'name:*' "chef-client"
+fi
+
 # Test/demo commands to be run and included in the final email
 OUT_DEST=/tmp/chef-tests
 rm $OUT_DEST
-COMMANDS="chef-client -v; knife cookbook list; knife node list; knife role list; knife status -r"
+COMMANDS="chef-client -v; knife cookbook list; knife node list; knife role list; knife environment list; knife status -r"
 echo $COMMANDS | tr \; \\n | while read cmd ; do 
   out=`$cmd`  
   echo -e "# $cmd\n$out" >> $OUT_DEST
 done
+
+# Make the bootstrap script available
+cp chef-bootstrap-foreign.sh /usr/local/bin
+chmod +x /usr/local/bin/chef-bootstrap-foreign.sh
+
+# SSH key that should be installed on clients
+KEY=`cat /root/.ssh/id_rsa.pub`
 
 # --------------------------
 # Notify the owner via email
@@ -203,6 +219,8 @@ echo -e "Dear User,\n\nChef 12 should be installed on `hostname` now. \
 Installation log can be found in: /var/log/init-chef.log \
 To explore the web console, copy this hostname and paste it into your browser. \
 To authenticate, use credentials saved in $CREDS.\n\n\
+Use the following ssh public key on the nodes, which need to be configured using this Chef server:\n
+$KEY\n\n
 Below is a sample of Chef commands showing details of the current configuration: \n\n\
 `cat $OUT_DEST`\n\n\
 Happy automation with Chef! For more information, use resources at: http://docs.chef.io/" |  mail -s "Chef 12 Is Deployed" ${SWAPPER_EMAIL} &
